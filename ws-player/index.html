@@ -1,0 +1,335 @@
+<!--Copyright (c) 2023 Synology Inc. All rights reserved.-->
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>Websocket player example</title>
+<style>
+	label {
+		width: 200px;
+		display: inline-block;
+		margin: 4px 0;
+	}
+	button {
+		margin: 2px;
+	}
+	input {
+		min-width: 172px;
+		&[type=date], &[type=time] {
+			height: 16px;
+			padding: 2px;
+		}
+	}
+</style>
+</head>
+<body style="font-family: Verdana, Arial; font-size: 13px;">
+
+<h3>First, get the sid:</h3>
+<label>NAS IP:</label>			<input type="text" id="ip"><br \>
+<label>NAS https port:</label>	<input type="text" id="port"><br \>
+<label>NAS username:</label>	<input type="text" id="user"><br \>
+<label>NAS password:</label>	<input type="text" id="password"><br \>
+<br \>
+
+<label>Login API:</label>		<a id="login" target="_blank"></a>			<button type="button" id="btn-login"> Get Sid</button><br \>
+<label>Logout API:</label>		<a id="logout" target="_blank"></a><br \>
+<label>Sid:</label>				<input type="text" id="sid">
+<p> ------ </p>
+
+<h3>Second, input the CamId:</h3>
+<label>Camera List API:</label>	<a id="cameras" target="_blank"></a>		<button type="button" id="btn-get-cam-id"> Get CamId</button><br \>
+<label>CamId:</label>			<input type="text" id="cam-id"><span style="color: gray;"> both "camId" or "name" are supported</span>
+<p> ------ </p>
+
+<h3>Here is the rtsp and websocket path of the camera:</h3>
+<label>Rtsp:</label><span id="rtsp"></span><br \>
+<label>Stream:</label><span id="stream"></span><br \>
+<label>Time:</label><input type="date" id="date">&nbsp;<input type="time" id="time" step="1"><br \><br \>
+<button type="button" id="btn-start">Start</button>
+<button type="button" id="btn-stop">Stop</button>
+<button type="button" id="btn-play">Play</button>
+<button type="button" id="btn-pause">Pause</button>
+<label id="play-time" style="width:fit-content;"></label>
+<p> ------ </p>
+
+<script src="js/req-utils.js"></script>
+<script src="js/ws-player.js"></script>
+<script>
+
+(function() {
+
+const elDoms = [
+	'ip', 'port', 'user', 'password', 'btn-login',
+	'login', 'sid', 'logout',
+	'btn-get-cam-id', 'cameras', 'cam-id',
+	'rtsp', 'stream', 'date', 'time',
+	'btn-start', 'btn-stop', 'btn-play', 'btn-pause', 'play-time',
+].reduce((ret, elId) => {
+	ret[elId] = document.getElementById(elId);
+	return ret;
+}, {});
+
+const reqUtils = new ReqUtils();
+const wsPlayer = new WsPlayer();
+
+class UiAct {
+	constructor() {
+		elDoms['ip'].value = window.location.host;
+		elDoms['port'].value = '5001';
+	}
+	getInput() {
+		return {
+			ip: elDoms['ip'].value || void(0),
+			port: elDoms['port'].value || void(0),
+			usr: elDoms['user'].value || void(0),
+			pwd: elDoms['password'].value || void(0),
+			sid: elDoms['sid'].value || void(0),
+			camId: elDoms['cam-id'].value || void(0),
+			time: this.getTime() || 0,
+		};
+	}
+	init() {
+		this.resetUi();
+
+		['ip', 'port', 'user', 'password'].forEach((elId) => {
+			elDoms[elId].onchange = () => this.updateLoginLink();
+		});
+
+		elDoms['btn-login'].onclick = () => this.doLogin(true);
+		elDoms['logout'].onclick = () => this.doLogout();
+		elDoms['sid'].onblur = () => this.onSidChange();
+		elDoms['btn-get-cam-id'].onclick = () => this.getCamList(true);
+		elDoms['cam-id'].onblur = () => this.onCamChange();
+		elDoms['btn-start'].onclick = () => this.startPlayer();
+		elDoms['btn-stop'].onclick = () => this.stopPlayer();
+		elDoms['btn-pause'].onclick = () => this.pausePlayer(true);
+		elDoms['btn-play'].onclick = () => this.pausePlayer(false);
+		elDoms['date'].onchange = () => this.onTimeChange();
+		elDoms['time'].onchange = () => this.onTimeChange();
+	}
+	resetUi() {
+		['sid', 'cam-id', 'date', 'time'].forEach((elId) => {
+			elDoms[elId].value = '';
+			this.resizeInput(elDoms[elId]);
+		});
+
+		this.setLink('login', reqUtils.getLoginUrl());
+		this.setLink('logout', reqUtils.getLogoutUrl());
+		this.setLink('cameras', reqUtils.getCamUrl());
+		elDoms['rtsp'].innerText = reqUtils.getRtspUrl();
+		elDoms['stream'].innerText = reqUtils.getWssUrl();
+
+		this.stopPlayer();
+	}
+	setLink(elId, url, force) {
+		const dom = elDoms[elId];
+
+		dom.text = url;
+		if ((force) || (elDoms['sid'].value)) {
+			dom.setAttribute('href', url);
+		} else {
+			dom.removeAttribute('href');
+		}
+	}
+	resizeInput(dom) {
+		dom.size = dom.value.length + 10;
+	}
+	async doLogin(manual) {
+		await this.doLogout();
+		this.updateLoginLink();
+
+		const url = elDoms['login'].text;
+		const resp = await reqUtils.sendWebapi(url);
+
+		if (resp?.data?.sid) {
+			elDoms['sid'].value = resp.data.sid;
+			this.onSidChange();
+		} else if (manual) {
+			window.open(url, '_blank');
+		}
+	}
+	updateLoginLink() {
+		this.setLink('login', reqUtils.getLoginUrl(this.getInput()), true);
+	}
+	async doLogout() {
+		const input = this.getInput();
+
+		if (input.sid) {
+			await reqUtils.sendWebapi(reqUtils.getLogoutUrl(input));
+		}
+
+		this.stopKeepAlive();
+		this.resetUi();
+	}
+	async getCamList(manual) {
+		const url = elDoms['cameras'].text;
+		if (manual) {
+			window.open(url, '_blank');
+			return;
+		}
+
+		const resp = await reqUtils.sendWebapi(url);
+
+		if (resp?.data?.cameras?.length) {
+			elDoms['cam-id'].value = this.getCamId(resp.data.cameras);
+			this.onCamChange();
+		}
+	}
+	getCamId(cameras) {
+		let camId = cameras[0].name;
+
+		cameras.some((cam) => {
+			if ("Normal" === cam.status) {
+				camId = cam.name;
+				return true;
+			}
+		});
+
+		return camId;
+	}
+	onSidChange() {
+		const dom = elDoms['sid'];
+
+		this.resizeInput(dom);
+
+		const input = this.getInput();
+		this.setLink('logout', reqUtils.getLogoutUrl(input));
+		this.setLink('cameras', reqUtils.getCamUrl(input));
+
+		this.startKeepAlive();
+		this.getCamList();
+	}
+	onCamChange() {
+		this.resizeInput(elDoms['cam-id']);
+
+		const input = this.getInput();
+		const url = reqUtils.getWssUrl(input);
+		if (url === elDoms['stream'].innerText) {
+			return;
+		}
+
+		elDoms['rtsp'].innerText = reqUtils.getRtspUrl(input);
+		elDoms['stream'].innerText = url;
+		this.stopPlayer();
+	}
+	stopPlayer() {
+		wsPlayer.stop();
+		wsPlayer.setVolume(0.5);
+		wsPlayer.setSpeed(1.0);
+
+		['btn-start', 'btn-pause'].forEach((elId) => {
+			elDoms[elId].hidden = false;
+			elDoms[elId].disabled = true;
+		});
+		['btn-stop', 'btn-play'].forEach((elId) => {
+			elDoms[elId].hidden = true;
+		});
+
+		const input = this.getInput();
+		elDoms['btn-start'].disabled = (!input.sid) || (!input.camId);
+		elDoms['play-time'].innerText = '--:--:--';
+	}
+	startPlayer(){
+		wsPlayer.play({
+			url: elDoms['stream'].innerText,
+			onError: (code, msg) => this.onError(code, msg),
+			onTimeUpdate: (timeMs) => this.onTimeUpdate(timeMs),
+		});
+
+		elDoms['btn-start'].hidden = true;
+		elDoms['btn-stop'].hidden = false;
+		elDoms['btn-pause'].disabled = false;
+	}
+	onError(code, msg) {
+		switch (code) {
+		case WsPlayer.ERROR_CODE.STREAMING_CLOSED:
+			if ("eof" === msg?.close) {
+				alert('No more recording to play, switch to liveview.');
+				this.seekPlayer(0);
+			} else {
+				alert('Abnormal camera or no camera permission.');
+			}
+			break;
+		case WsPlayer.ERROR_CODE.WEBSOCKET_CLOSED:
+			alert('Unauthorized, invalid params, or connection timeout.');
+			break;
+		case WsPlayer.ERROR_CODE.UNSUPPORTED_CODEC:
+			alert('Websocket player not support this codec.' + JSON.stringify(msg));
+			break;
+		case WsPlayer.ERROR_CODE.UNSUPPORTED_MIME:
+			alert('Browser not support this mime type.' + JSON.stringify(msg));
+			break;
+		case WsPlayer.ERROR_CODE.WEBSOCKET_URL_ERROR:
+			alert('Invalid websocket url.' + JSON.stringify(msg));
+			break;
+		default:
+			break;
+		}
+	}
+	onTimeUpdate(timeMs) {
+		const timeSec = Math.floor(timeMs / 1000);
+		const dom = elDoms['play-time'];
+
+		if (dom.timeSec !== timeSec) {
+			dom.timeSec = timeSec;
+			dom.innerText = new Date(timeMs).toLocaleString('sv-SE').replace(' ', 'T');
+		}
+	}
+	pausePlayer(blPause) {
+		elDoms['btn-pause'].hidden = blPause;
+		elDoms['btn-play'].hidden = !blPause;
+
+		if (blPause) {
+			wsPlayer.pause();
+		} else {
+			wsPlayer.resume();
+		}
+	}
+	startKeepAlive() {
+		this.stopKeepAlive();
+		this.timerKeepAlive = setTimeout(async () => {
+			const url = reqUtils.getKeepAliveUrl(this.getInput());
+			const resp = await reqUtils.sendWebapi(url);
+
+			if (resp?.success) {
+				this.startKeepAlive();
+			}
+		}, 60*1000);
+	}
+	stopKeepAlive() {
+		clearTimeout(this.timerKeepAlive);
+	}
+	getTime() {
+		const date = elDoms['date'].value;
+		const time = elDoms['time'].value || '00:00:00';
+
+		if (date) {
+			return date + 'T' + time;
+		}
+	}
+	onTimeChange() {
+		const input = this.getInput();
+		const url = reqUtils.getWssUrl(input);
+		if (url === elDoms['stream'].innerText) {
+			return;
+		}
+
+		elDoms['rtsp'].innerText = reqUtils.getRtspUrl(input);
+		elDoms['stream'].innerText = url;
+		this.seekPlayer(input.time);
+	}
+	seekPlayer(time = 0) {
+		wsPlayer.seek(time);
+		if (!time) {
+			wsPlayer.setSpeed(1.0);
+		}
+	}
+}
+
+new UiAct().init();
+
+})();
+
+</script>
+</body>
+</html>

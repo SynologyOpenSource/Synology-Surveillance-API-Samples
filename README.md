@@ -12,8 +12,10 @@ When to use Synology-Surveillance-API-Samples
 * [Live - stream analyze](./live-stream/README.md)
   * We'll demonstrate how to get the camera's live stream and analyze it with your own model. We develop a fall detection model as an example.
 * [Recording analyze and add bookmark](./recording-bookmark/README.md)
-  * We’ll demonstrate how to analyze existing recordings with your own model and
-add book mark to important timing. We develop a clothe model as an example.
+  * We'll demonstrate how to analyze existing recordings with your own model and add book mark to important timing. We develop a clothe model as an example.
+* [Camera player](./ws-player/README.md)
+  * We'll demonstrate how to play a camera stream in a browser using WebSocket and Media Source Extensions (MSE).
+  * This example is compatible with SurveillanceStation version `9.1.2` and above.
 
 ## Prepare your environment
 ### Dependencies (Web API parts)
